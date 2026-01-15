@@ -2,12 +2,13 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# 🚀 CHANGED: Instead of naming the file specifically, 
-# we copy everything in the current folder to /src
+# 🚀 This line is the fix: It copies EVERYTHING in the repo to the build container
 COPY . .
 
-# Restore and Publish
+# Now we run restore on whatever .csproj file it finds in the current directory
 RUN dotnet restore
+
+# Build and Publish
 RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 
 # 2. Runtime Stage
