@@ -21,36 +21,35 @@ public class ContactController : ControllerBase
     {
         var client = _clientFactory.CreateClient("ResendClient");
 
-        var emailPayload = new
+    var emailPayload = new
+    {
+        from = "onboarding@resend.dev",
+        to = "Halloultarek1@gmail.com", 
+        subject = $"[PORTFOLIO] {request.Subject}",
+        html = $"<h3>Message from {request.Name}</h3><p>{request.Message}</p>"
+    };
+
+    var content = new StringContent(JsonSerializer.Serialize(emailPayload), Encoding.UTF8, "application/json");
+
+    try 
+    {
+        var response = await client.PostAsync("emails", content);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (response.IsSuccessStatusCode)
         {
-            from = "onboarding@resend.dev", // DO NOT CHANGE THIS (Resend Free Tier Rule)
-            to = "Halloultarek1@gmail.com",   // Your verified email
-            subject = $"[PORTFOLIO] {request.Subject}",
-            html = $@"
-                <h3>New Portfolio Message</h3>
-                <p><strong>From:</strong> {request.Name} ({request.Email})</p>
-                <hr/>
-                <p>{request.Message}</p>"
-        };
-
-        var content = new StringContent(JsonSerializer.Serialize(emailPayload), Encoding.UTF8, "application/json");
-
-        try 
-        {
-            var response = await client.PostAsync("emails", content);
-
-            if (response.IsSuccessStatusCode)
-            {
-                return Ok(new { status = "SUCCESS", message = "Transmission Delivered." });
-            }
-
-            // This captures the error from Resend (helps debug the 403)
-            var errorContent = await response.Content.ReadAsStringAsync();
-            return StatusCode((int)response.StatusCode, new { status = "ERROR", details = errorContent });
+            return Ok(new { status = "SUCCESS" });
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { status = "ERROR", message = ex.Message });
-        }
+
+        // 🚨 THIS IS THE KEY: This will print the EXACT reason in your Render Logs
+        Console.WriteLine($"!!! RESEND REJECTION: {response.StatusCode} - {responseBody}");
+
+        return StatusCode((int)response.StatusCode, responseBody);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"!!! SYSTEM ERROR: {ex.Message}");
+        return StatusCode(500, ex.Message);
+    }
     }
 }
