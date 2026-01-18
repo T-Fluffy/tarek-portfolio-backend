@@ -1,43 +1,61 @@
 using Microsoft.AspNetCore.Mvc;
-using FluentEmail.Core;
 using Portfolio.Backend.Models;
 using Microsoft.AspNetCore.RateLimiting;
+using System.Text;
+using System.Text.Json;
+
 
 [ApiController]
 [Route("api/[controller]")]
 [EnableRateLimiting("fixed")]
 public class ContactController : ControllerBase
 {
-    private readonly IFluentEmail _email;
+    private readonly IHttpClientFactory _clientFactory;
 
-    public ContactController(IFluentEmail email)
+    public ContactController(IHttpClientFactory clientFactory)
     {
-        _email = email;
+        _clientFactory = clientFactory;
     }
 
     [HttpPost("send")]
     public async Task<IActionResult> SendTransmission([FromBody] ContactRequest request)
     {
-        var email = _email
-            .To("Halloultarek1@gmail.com") // the email
-            .Subject($"[PORTFOLIO] {request.Subject}")
-            .Body($@"
-                New Transmission Received:
-                ---------------------------
-                Sender: {request.Name}
-                Email: {request.Email}
-                
-                Message:
-                {request.Message}
-            ");
+        var client = _clientFactory.CreateClient("ResendClient");
 
-        var response = await email.SendAsync();
-
-        if (response.Successful)
+        // 🚀 Resend API Payload
+        var emailPayload = new
         {
-            return Ok(new { status = "SUCCESS", message = "Transmission Delivered." });
-        }
+            from = "onboarding@resend.dev", // Required for Resend Free Tier
+            to = "Halloultarek1@gmail.com",   // Your destination email
+            subject = $"[PORTFOLIO] {request.Subject}",
+            html = $@"
+                <h3>New Message from Portfolio</h3>
+                <p><strong>Sender:</strong> {request.Name}</p>
+                <p><strong>Email:</strong> {request.Email}</p>
+                <hr/>
+                <p><strong>Message:</strong></p>
+                <p>{request.Message}</p>"
+        };
 
-        return BadRequest(new { status = "ERROR", message = "Uplink failed." });
+        var json = JsonSerializer.Serialize(emailPayload);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        try 
+        {
+            var response = await client.PostAsync("emails", content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return Ok(new { status = "SUCCESS", message = "Transmission Delivered." });
+            }
+
+            // If Resend returns an error, log it
+            var errorDetails = await response.Content.ReadAsStringAsync();
+            return StatusCode((int)response.StatusCode, new { status = "ERROR", message = "Provider rejected request.", details = errorDetails });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { status = "ERROR", message = "Internal Uplink Failure.", details = ex.Message });
+        }
     }
 }
