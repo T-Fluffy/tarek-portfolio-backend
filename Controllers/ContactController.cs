@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.RateLimiting;
 using System.Text;
 using System.Text.Json;
 
-
 [ApiController]
 [Route("api/[controller]")]
 [EnableRateLimiting("fixed")]
@@ -22,23 +21,19 @@ public class ContactController : ControllerBase
     {
         var client = _clientFactory.CreateClient("ResendClient");
 
-        // 🚀 Resend API Payload
         var emailPayload = new
         {
-            from = "onboarding@resend.dev", // Required for Resend Free Tier
-            to = "Halloultarek1@gmail.com",   // Your destination email
+            from = "onboarding@resend.dev", // DO NOT CHANGE THIS (Resend Free Tier Rule)
+            to = "Halloultarek1@gmail.com",   // Your verified email
             subject = $"[PORTFOLIO] {request.Subject}",
             html = $@"
-                <h3>New Message from Portfolio</h3>
-                <p><strong>Sender:</strong> {request.Name}</p>
-                <p><strong>Email:</strong> {request.Email}</p>
+                <h3>New Portfolio Message</h3>
+                <p><strong>From:</strong> {request.Name} ({request.Email})</p>
                 <hr/>
-                <p><strong>Message:</strong></p>
                 <p>{request.Message}</p>"
         };
 
-        var json = JsonSerializer.Serialize(emailPayload);
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var content = new StringContent(JsonSerializer.Serialize(emailPayload), Encoding.UTF8, "application/json");
 
         try 
         {
@@ -49,13 +44,13 @@ public class ContactController : ControllerBase
                 return Ok(new { status = "SUCCESS", message = "Transmission Delivered." });
             }
 
-            // If Resend returns an error, log it
-            var errorDetails = await response.Content.ReadAsStringAsync();
-            return StatusCode((int)response.StatusCode, new { status = "ERROR", message = "Provider rejected request.", details = errorDetails });
+            // This captures the error from Resend (helps debug the 403)
+            var errorContent = await response.Content.ReadAsStringAsync();
+            return StatusCode((int)response.StatusCode, new { status = "ERROR", details = errorContent });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { status = "ERROR", message = "Internal Uplink Failure.", details = ex.Message });
+            return StatusCode(500, new { status = "ERROR", message = ex.Message });
         }
     }
 }
