@@ -23,10 +23,14 @@ public class ContactController : ControllerBase
 
     var emailPayload = new
     {
-        from = "onboarding@resend.dev",
-        to = "Halloultarek1@gmail.com", 
-        subject = $"[PORTFOLIO] {request.Subject}",
-        html = $"<h3>Message from {request.Name}</h3><p>{request.Message}</p>"
+        from = "onboarding@resend.dev", // Correct: Resend requires this for free tier
+    to = "halloultarek1@gmail.com",   // 👈 CHANGE THIS TO ALL LOWERCASE
+    subject = $"[PORTFOLIO] {request.Subject}",
+    html = $@"
+        <h3>New Portfolio Message</h3>
+        <p><strong>From:</strong> {request.Name} ({request.Email})</p>
+        <hr/>
+        <p>{request.Message}</p>"
     };
 
     var content = new StringContent(JsonSerializer.Serialize(emailPayload), Encoding.UTF8, "application/json");
