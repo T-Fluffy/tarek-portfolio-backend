@@ -1,11 +1,15 @@
+# Build output
 bin/
 obj/
 publish/
-.git/
-.vs/
 *.user
+
+# Secrets: never commit real settings
 **/appsettings.json
+!**/appsettings.Example.json
 **/appsettings.Development.json
+
+# Logs & system
 *.log
 .DS_Store
 Thumbs.db
