@@ -16,6 +16,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ASPNETCORE_URLS=http://+:8080
+# Program.cs binds UseUrls to the PORT env var (default 10000); align the default
+# so local runs and HEALTHCHECK match EXPOSE. Render overrides PORT to 10000.
+ENV PORT=8080
 EXPOSE 8080
 
 # Run as the built-in non-root 'app' user (UID 1654) for defense-in-depth
