@@ -19,14 +19,13 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.ForwardLimit = 1;
 });
 
-// 1. Updated CORS: Added lowercase version and localhost variants
+// 1. CORS: browsers normalize origins to lowercase, and WithOrigins lowercases hostnames too
 builder.Services.AddCors(options => {
-    options.AddPolicy("AllowReactApp",
+    options.AddDefaultPolicy(
         policy => policy.WithOrigins(
                             "http://localhost:5173",
                             "http://localhost:3000",
-                            "https://T-Fluffy.github.io",
-                            "https://t-fluffy.github.io" // Browsers often send origin in lowercase
+                            "https://t-fluffy.github.io"
                         )
                         .AllowAnyMethod()
                         .AllowAnyHeader());
@@ -63,7 +62,8 @@ var app = builder.Build();
 
 // 🚀 CRITICAL: Trust forwarded headers, then CORS, then the rate limiter, then controllers
 app.UseForwardedHeaders();
-app.UseCors("AllowReactApp");
+
+app.UseCors();
 app.UseRateLimiter();
 app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
