@@ -15,32 +15,52 @@ public class ContactController : ControllerBase
     private readonly IHttpClientFactory _clientFactory;
     private readonly ITurnstileVerifier _turnstile;
     private readonly IConfiguration _config;
+    private readonly IWebHostEnvironment _env;
     private readonly ILogger<ContactController> _logger;
 
     public ContactController(
         IHttpClientFactory clientFactory,
         ITurnstileVerifier turnstile,
         IConfiguration config,
+        IWebHostEnvironment env,
         ILogger<ContactController> logger)
     {
         _clientFactory = clientFactory;
         _turnstile = turnstile;
         _config = config;
+        _env = env;
         _logger = logger;
     }
 
     [HttpPost("send")]
     public async Task<IActionResult> SendTransmission([FromBody] ContactRequest request, CancellationToken cancellationToken)
     {
-        // Honeypot anti-spam: silently pretend success for bots.
+        // Honeypot anti-spam: silently pretend success for bots. This runs
+        // BEFORE model validation (auto-400 is suppressed in Program.cs) so
+        // bots probing with invalid data still get fake SUCCESS.
         if (!string.IsNullOrWhiteSpace(request.Honeypot))
         {
             return Ok(new { status = "SUCCESS" });
         }
 
-        // Turnstile check is active only once TurnstileSecretKey is configured,
-        // so the current frontend keeps working until it sends tokens.
-        if (!string.IsNullOrWhiteSpace(_config["TurnstileSecretKey"]))
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(new { status = "ERROR", message = "Invalid request." });
+        }
+
+        // Fail closed in Production: a missing Turnstile secret must never
+        // silently disable bot protection. Development keeps the skip.
+        if (string.IsNullOrWhiteSpace(_config["TurnstileSecretKey"]))
+        {
+            if (!_env.IsDevelopment())
+            {
+                _logger.LogCritical("TurnstileSecretKey is missing; rejecting contact send.");
+                return StatusCode(
+                    StatusCodes.Status503ServiceUnavailable,
+                    new { status = "ERROR", reason = "captcha-unavailable", message = "Verification unavailable. Try again later." });
+            }
+        }
+        else
         {
             if (string.IsNullOrWhiteSpace(request.TurnstileToken))
             {
@@ -61,8 +81,11 @@ public class ContactController : ControllerBase
 
         // Defense-in-depth: [Required] allows whitespace-only strings, so reject
         // blanks after trimming even if model validation is bypassed/changed.
+        // Control characters in the email are rejected too: it is echoed back
+        // in the body and used as reply_to, so keep it strictly printable.
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(email) ||
-            string.IsNullOrWhiteSpace(subject) || string.IsNullOrWhiteSpace(message))
+            string.IsNullOrWhiteSpace(subject) || string.IsNullOrWhiteSpace(message) ||
+            email.Any(char.IsControl))
         {
             return BadRequest(new { status = "ERROR", message = "All fields are required." });
         }
