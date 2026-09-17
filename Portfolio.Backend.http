@@ -1,6 +1,19 @@
-@Portfolio.Backend_HostAddress = http://localhost:5080
+@Portfolio.Backend_HostAddress = http://localhost:10000
 
-GET {{Portfolio.Backend_HostAddress}}/weatherforecast/
+GET {{Portfolio.Backend_HostAddress}}/health
 Accept: application/json
+
+###
+
+POST {{Portfolio.Backend_HostAddress}}/api/contact/send
+Content-Type: application/json
+
+{
+  "name": "Tarek",
+  "email": "test@example.com",
+  "subject": "Hello",
+  "message": "Test message from .http file",
+  "honeypot": ""
+}
 
 ###
