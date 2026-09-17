@@ -35,6 +35,13 @@ builder.Services.AddCors(options => {
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, _) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.ContentType = "application/json";
+        context.HttpContext.Response.Headers.RetryAfter = "60";
+        await context.HttpContext.Response.WriteAsJsonAsync(new { status = "ERROR", message = "Too many requests." });
+    };
     options.AddPolicy("fixed", httpContext =>
     {
         var clientIp = GetClientIp(httpContext);
@@ -48,17 +55,37 @@ builder.Services.AddRateLimiter(options =>
 });
 
 // 3. Resend API Client
+var resendKey = builder.Configuration["ResendKey"];
+if (string.IsNullOrWhiteSpace(resendKey))
+{
+    // Fail-visible, not fail-silent: log at startup so a missing Render env var
+    // is obvious, and /health below reports degraded instead of healthy.
+    Console.Error.WriteLine("CRITICAL: 'ResendKey' is missing. Contact sends will fail until it is set.");
+}
 builder.Services.AddHttpClient("ResendClient", client =>
 {
     client.BaseAddress = new Uri("https://api.resend.com/");
-    // This looks for "ResendKey" in your Render Environment Variables
-    var key = builder.Configuration["ResendKey"];
-    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {key}");
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {resendKey}");
 });
 
 builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
 
 var app = builder.Build();
+
+// Generic error surface: no stack traces / provider details leak to clients.
+app.UseExceptionHandler();
+
+// Minimal security headers for an API (Render terminates TLS in front).
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.XContentTypeOptions = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()";
+    await next();
+});
 
 // 🚀 CRITICAL: Trust forwarded headers, then CORS, then the rate limiter, then controllers
 app.UseForwardedHeaders();
@@ -66,7 +93,15 @@ app.UseForwardedHeaders();
 app.UseCors();
 app.UseRateLimiter();
 app.MapControllers();
-app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.MapGet("/health", (IConfiguration config) =>
+{
+    // Degraded (not healthy) when the mail uplink cannot work.
+    if (string.IsNullOrWhiteSpace(config["ResendKey"]))
+    {
+        return Results.Json(new { status = "degraded", reason = "ResendKey missing" }, statusCode: 503);
+    }
+    return Results.Ok(new { status = "healthy" });
+});
 
 app.Run();
 

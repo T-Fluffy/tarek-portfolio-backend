@@ -1,8 +1,9 @@
 # 1. Build Stage
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-COPY . .
+COPY *.csproj ./
 RUN dotnet restore
+COPY . .
 RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 
 # 2. Runtime Stage
@@ -25,7 +26,7 @@ EXPOSE 8080
 USER $APP_UID
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl --fail --silent http://localhost:8080/health || exit 1
+    CMD sh -c 'curl --fail --silent http://localhost:${PORT:-8080}/health || exit 1'
 
 # 🚀 CHANGE THIS LINE to match your log:
 ENTRYPOINT ["dotnet", "Portfolio.Backend.dll"]
