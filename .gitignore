@@ -2,6 +2,7 @@
 bin/
 obj/
 publish/
+TestResults/
 *.user
 
 # Secrets: never commit real settings
