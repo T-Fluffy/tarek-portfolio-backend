@@ -7,7 +7,7 @@ Live at `https://tarek-portfolio-backend.onrender.com` (Docker image built from 
 
 ### `POST /api/contact/send`
 
-Accepts a JSON contact message and relays it as an email. Rate-limited to **3 requests/min per client IP** (excess gets `429` + `Retry-After: 60`).
+Accepts a JSON contact message and relays it as an email. Rate-limited to **3 requests/min per connection IP** (excess gets `429` + `Retry-After: 60`). The bucket keys off the direct peer IP captured before header forwarding, so forged `X-Forwarded-For` values cannot mint fresh buckets; Turnstile (not the limiter) is the primary bot defense.
 
 | Field            | Required | Rules                                                                 |
 | :--------------- | :------- | :-------------------------------------------------------------------- |
@@ -22,17 +22,17 @@ Request bodies are capped at 32 KB. The sender address is set as the email `repl
 
 ### `GET /health`
 
-Returns `{"status":"healthy"}`. Returns `503 {"status":"degraded","reason":"ResendKey missing"}` when the mail uplink cannot work — Render/docker health checks should treat non-200 as unhealthy.
+Returns `{"status":"healthy"}`. Returns `503 {"status":"degraded","reason":"..."}` when the mail uplink (`ResendKey`) or the captcha gate (`TurnstileSecretKey`) is unconfigured — Render/docker health checks should treat non-200 as unhealthy.
 
 ## Environment variables (Render)
 
 | Variable             | Required | Description                                                              |
 | :------------------- | :------- | :----------------------------------------------------------------------- |
 | `ResendKey`          | Yes      | Resend API key (`re_...`). Missing key is logged at startup (`CRITICAL`) |
-| `TurnstileSecretKey` | No       | Cloudflare Turnstile secret. When set, sends require a valid token; when unset, the check is skipped (non-breaking rollout) |
+| `TurnstileSecretKey` | In Production | Cloudflare Turnstile secret. Missing key logs `CRITICAL` at boot, fails `/health`, and fails sends with `503 captcha-unavailable`. Skipped in Development only |
 | `PORT`               | No       | Port to bind (default `10000`); Render injects this automatically        |
 
-CORS allows `http://localhost:5173`, `http://localhost:3000` and `https://t-fluffy.github.io` (no credentials).
+CORS allows `https://t-fluffy.github.io` (plus `http://localhost:5173` / `http://localhost:3000` in Development only), methods `GET`/`POST`, header `Content-Type`, no credentials.
 
 ## Run locally
 
@@ -60,11 +60,12 @@ The API listens on `http://0.0.0.0:10000` by default (override with `PORT`). A `
 dotnet test
 ```
 
-16 tests (xUnit.net v3 on Microsoft Testing Platform): model validation plus controller coverage — honeypot silence, generic `502` on Resend failures, whitespace rejection, and all Turnstile branches. Note: the local machine needs the matching .NET runtime or `DOTNET_ROLL_FORWARD=LatestMajor` to execute the testhost.
+29 tests (xUnit.net v3 on Microsoft Testing Platform): model validation, controller coverage (honeypot silence, generic `502`, whitespace rejection, Turnstile branches, fail-closed `503`, payload sanitization/encoding), and full-pipeline integration tests (rate-limit `429` + spoof resistance, CORS allow/deny, honeypot-before-validation, health states). Note: the local machine needs the matching .NET runtime or `DOTNET_ROLL_FORWARD=LatestMajor` to execute the testhost.
 
 ## Security notes
 
-- Input is validated (`[Required]`, `[EmailAddress]`, `[StringLength]`, blank rejection); honeypot is bounded.
+- Input is validated (`[Required]`, `[EmailAddress]`, `[StringLength]`, blank rejection, control-char email reject); honeypot is bounded and checked before validation so bots always get fake `SUCCESS`.
+- A missing `TurnstileSecretKey` fails closed in Production (`503 captcha-unavailable`); Development skips the check.
 - Upstream Resend failures always surface as a generic `502` — provider status codes are logged server-side only, never forwarded.
 - Security headers on all responses (`nosniff`, `DENY` framing, `no-referrer`, restrictive `Permissions-Policy`); unhandled errors become generic problem responses, never stack traces.
 - Resend calls use a 10 s `HttpClient` timeout and honor request cancellation.

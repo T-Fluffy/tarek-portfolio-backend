@@ -1,8 +1,11 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Portfolio.Backend.Models;
 
@@ -47,10 +50,21 @@ public class ContactControllerTests
         }
     }
 
+    private sealed class FakeEnvironment(string environmentName) : IWebHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = environmentName;
+        public string ApplicationName { get; set; } = "Tests";
+        public string ContentRootPath { get; set; } = "";
+        public IFileProvider ContentRootFileProvider { get; set; } = null!;
+        public string WebRootPath { get; set; } = "";
+        public IFileProvider WebRootFileProvider { get; set; } = null!;
+    }
+
     private static ContactController BuildController(
         IConfiguration config,
         FakeHandler resendHandler,
-        StubVerifier? verifier = null)
+        StubVerifier? verifier = null,
+        string? environment = null)
     {
         var resendClient = new HttpClient(resendHandler) { BaseAddress = new Uri("https://api.resend.com/") };
         var factory = new StubClientFactory(new Dictionary<string, HttpClient> { ["ResendClient"] = resendClient });
@@ -58,6 +72,7 @@ public class ContactControllerTests
             factory,
             verifier ?? new StubVerifier((_, _, _) => Task.FromResult(true)),
             config,
+            new FakeEnvironment(environment ?? Environments.Development),
             NullLogger<ContactController>.Instance);
         controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
         return controller;
@@ -230,5 +245,82 @@ public class ContactControllerTests
         var verifier = new Services.TurnstileVerifier(factory, TurnstileConfig(), NullLogger<Services.TurnstileVerifier>.Instance);
 
         Assert.False(await verifier.VerifyAsync("token", null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task TurnstileMissingSecret_Production_Returns503CaptchaUnavailable()
+    {
+        var resend = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var verifier = new StubVerifier((_, _, _) => Task.FromResult(true));
+        var controller = BuildController(NoTurnstileConfig(), resend, verifier, Environments.Production);
+
+        var result = await controller.SendTransmission(ValidRequest(), CancellationToken.None);
+
+        var obj = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, obj.StatusCode);
+        Assert.Contains("captcha-unavailable", JsonSerializer.Serialize(obj.Value));
+        Assert.Equal(0, resend.Calls);
+        Assert.Equal(0, verifier.Calls);
+    }
+
+    [Fact]
+    public async Task TurnstileMissingSecret_Development_SkipsCheck()
+    {
+        var resend = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var controller = BuildController(NoTurnstileConfig(), resend, environment: Environments.Development);
+
+        var result = await controller.SendTransmission(ValidRequest(), CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(1, resend.Calls);
+    }
+
+    [Fact]
+    public async Task SubjectControlChars_AreStrippedFromResendPayload()
+    {
+        var resend = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var controller = BuildController(NoTurnstileConfig(), resend);
+        var request = ValidRequest();
+        request.Subject = "a\r\nb\tc";
+
+        var result = await controller.SendTransmission(request, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.DoesNotContain("\r", resend.LastRequestBody);
+        Assert.DoesNotContain("\n", resend.LastRequestBody);
+        Assert.Contains("[PORTFOLIO] a  b c", resend.LastRequestBody);
+    }
+
+    [Fact]
+    public async Task MessageHtml_IsEncodedInResendPayload()
+    {
+        var resend = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var controller = BuildController(NoTurnstileConfig(), resend);
+        var request = ValidRequest();
+        request.Message = "<script>alert(1)</script>";
+
+        var result = await controller.SendTransmission(request, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        // Parse the JSON payload: System.Text.Json escapes & as \u0026 on the
+        // wire, so assert on the decoded html field, not the raw string.
+        using var payload = JsonDocument.Parse(resend.LastRequestBody!);
+        var html = payload.RootElement.GetProperty("html").GetString()!;
+        Assert.DoesNotContain("<script>", html);
+        Assert.Contains("&lt;script&gt;", html);
+    }
+
+    [Fact]
+    public async Task EmailWithControlChars_ReturnsBadRequest()
+    {
+        var resend = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var controller = BuildController(NoTurnstileConfig(), resend);
+        var request = ValidRequest();
+        request.Email = "test@example.com\r\nBcc: evil@example.com";
+
+        var result = await controller.SendTransmission(request, CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(0, resend.Calls);
     }
 }

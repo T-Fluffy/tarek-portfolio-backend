@@ -1,5 +1,5 @@
-using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
 
@@ -19,16 +19,20 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.ForwardLimit = 1;
 });
 
-// 1. CORS: browsers normalize origins to lowercase, and WithOrigins lowercases hostnames too
+// 1. CORS: exact origins only. Localhost origins exist for local development
+// and are never allowed in Production. Methods/headers are narrowed to what
+// the contact form actually needs (CORS constrains browsers, not attackers).
+var allowedOrigins = new List<string> { "https://t-fluffy.github.io" };
+if (builder.Environment.IsDevelopment())
+{
+    allowedOrigins.Add("http://localhost:5173");
+    allowedOrigins.Add("http://localhost:3000");
+}
 builder.Services.AddCors(options => {
     options.AddDefaultPolicy(
-        policy => policy.WithOrigins(
-                            "http://localhost:5173",
-                            "http://localhost:3000",
-                            "https://t-fluffy.github.io"
-                        )
-                        .AllowAnyMethod()
-                        .AllowAnyHeader());
+        policy => policy.WithOrigins(allowedOrigins.ToArray())
+                        .WithMethods("GET", "POST")
+                        .WithHeaders("Content-Type"));
 });
 
 // 2. Rate Limiting keyed off the real client IP (works behind Render's proxy)
@@ -44,7 +48,19 @@ builder.Services.AddRateLimiter(options =>
     };
     options.AddPolicy("fixed", httpContext =>
     {
-        var clientIp = GetClientIp(httpContext);
+        // Key on the DIRECT peer IP captured before UseForwardedHeaders runs
+        // (see the middleware below), NOT on any forwarded-header value and
+        // NOT on the post-middleware RemoteIpAddress. Rationale, verified by
+        // test: with unknown-proxy trust (cleared KnownNetworks/Proxies) the
+        // forwarded-headers middleware honors even a lone forged X-Forwarded-For,
+        // so anything derived from headers is client-mintable rate buckets.
+        // Trade-off: behind Render's proxy all visitors share the egress IP(s),
+        // so the bucket is coarser than per-client. Acceptable here because the
+        // Turnstile gate (not the limiter) is the primary bot defense, and a
+        // coarse bucket fails safe (throttles bursts, never grants bypass).
+        var clientIp = httpContext.Items["DirectRemoteIp"] as string
+            ?? httpContext.Connection.RemoteIpAddress?.ToString()
+            ?? "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(clientIp, _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = 3,
@@ -85,6 +101,14 @@ builder.Services.AddScoped<Portfolio.Backend.Services.ITurnstileVerifier, Portfo
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 
+// Suppress the automatic 400 so the honeypot check in ContactController runs
+// FIRST: bots sending honeypot + invalid data must get fake SUCCESS, not a
+// 400 that leaks the bot-detection signal. The action validates manually.
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.SuppressModelStateInvalidFilter = true;
+});
+
 var app = builder.Build();
 
 // Generic error surface: no stack traces / provider details leak to clients.
@@ -101,6 +125,14 @@ app.Use(async (context, next) =>
 });
 
 // 🚀 CRITICAL: Trust forwarded headers, then CORS, then the rate limiter, then controllers
+// Snapshot the direct peer IP FIRST: the rate limiter keys on it (see above)
+// so forged forwarded-headers can never mint fresh buckets.
+app.Use((context, next) =>
+{
+    context.Items["DirectRemoteIp"] = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    return next(context);
+});
+
 app.UseForwardedHeaders();
 
 app.UseCors();
@@ -108,28 +140,18 @@ app.UseRateLimiter();
 app.MapControllers();
 app.MapGet("/health", (IConfiguration config) =>
 {
-    // Degraded (not healthy) when the mail uplink cannot work.
+    // Degraded (not healthy) when the mail uplink or captcha gate cannot work.
     if (string.IsNullOrWhiteSpace(config["ResendKey"]))
     {
         return Results.Json(new { status = "degraded", reason = "ResendKey missing" }, statusCode: 503);
+    }
+    if (string.IsNullOrWhiteSpace(config["TurnstileSecretKey"]))
+    {
+        return Results.Json(new { status = "degraded", reason = "TurnstileSecretKey missing" }, statusCode: 503);
     }
     return Results.Ok(new { status = "healthy" });
 });
 
 app.Run();
 
-// Prefer the client IP forwarded by Render's proxy, falling back to the direct connection.
-static string GetClientIp(HttpContext context)
-{
-    var forwarded = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-    if (!string.IsNullOrWhiteSpace(forwarded))
-    {
-        var first = forwarded.Split(',')[0].Trim();
-        if (IPAddress.TryParse(first, out _))
-        {
-            return first;
-        }
-    }
-
-    return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-}
+public partial class Program { }
