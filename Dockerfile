@@ -11,9 +11,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 
-# Install curl for HEALTHCHECK
+# Patch OS packages (e.g. libpcre2-8-0 CVEs) then install curl for HEALTHCHECK.
+# Pinned targeted upgrade keeps the layer small; full `apt-get upgrade` on next rebuild if Trivy flags more.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl libpcre2-8-0 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ASPNETCORE_URLS=http://+:8080
