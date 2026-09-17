@@ -1,6 +1,6 @@
 # Portfolio.Backend — Contact Gateway (Render)
 
-A minimal .NET 8 Web API that relays portfolio contact messages to **Resend**.
+A minimal .NET 10 Web API that relays portfolio contact messages to **Resend**.
 
 ## Environment variables (Render)
 
