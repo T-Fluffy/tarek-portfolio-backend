@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Portfolio.Backend.Models;
+using Portfolio.Backend.Services;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Net;
 using System.Text;
@@ -12,11 +13,19 @@ using System.Text.Json;
 public class ContactController : ControllerBase
 {
     private readonly IHttpClientFactory _clientFactory;
+    private readonly ITurnstileVerifier _turnstile;
+    private readonly IConfiguration _config;
     private readonly ILogger<ContactController> _logger;
 
-    public ContactController(IHttpClientFactory clientFactory, ILogger<ContactController> logger)
+    public ContactController(
+        IHttpClientFactory clientFactory,
+        ITurnstileVerifier turnstile,
+        IConfiguration config,
+        ILogger<ContactController> logger)
     {
         _clientFactory = clientFactory;
+        _turnstile = turnstile;
+        _config = config;
         _logger = logger;
     }
 
@@ -27,6 +36,22 @@ public class ContactController : ControllerBase
         if (!string.IsNullOrWhiteSpace(request.Honeypot))
         {
             return Ok(new { status = "SUCCESS" });
+        }
+
+        // Turnstile check is active only once TurnstileSecretKey is configured,
+        // so the current frontend keeps working until it sends tokens.
+        if (!string.IsNullOrWhiteSpace(_config["TurnstileSecretKey"]))
+        {
+            if (string.IsNullOrWhiteSpace(request.TurnstileToken))
+            {
+                return BadRequest(new { status = "ERROR", message = "Captcha verification failed." });
+            }
+
+            var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString();
+            if (!await _turnstile.VerifyAsync(request.TurnstileToken, remoteIp, cancellationToken))
+            {
+                return BadRequest(new { status = "ERROR", message = "Captcha verification failed." });
+            }
         }
 
         var name = request.Name.Trim();

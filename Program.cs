@@ -69,6 +69,19 @@ builder.Services.AddHttpClient("ResendClient", client =>
     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {resendKey}");
 });
 
+// 4. Cloudflare Turnstile verification client. The check only enforces once
+// TurnstileSecretKey is set (Render env var), so rollout is non-breaking.
+if (string.IsNullOrWhiteSpace(builder.Configuration["TurnstileSecretKey"]))
+{
+    Console.Error.WriteLine("WARNING: 'TurnstileSecretKey' is missing. Captcha verification is skipped until it is set.");
+}
+builder.Services.AddHttpClient("TurnstileClient", client =>
+{
+    client.BaseAddress = new Uri("https://challenges.cloudflare.com/");
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
+builder.Services.AddScoped<Portfolio.Backend.Services.ITurnstileVerifier, Portfolio.Backend.Services.TurnstileVerifier>();
+
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 

@@ -29,4 +29,9 @@ public class ContactRequest
     // Bounded to prevent unbounded allocation from malicious payloads.
     [StringLength(500)]
     public string? Honeypot { get; set; }
+
+    // Cloudflare Turnstile token from the frontend widget. Required only when
+    // TurnstileSecretKey is configured; otherwise ignored for compatibility.
+    [StringLength(2048)]
+    public string? TurnstileToken { get; set; }
 }
