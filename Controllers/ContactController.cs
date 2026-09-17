@@ -8,6 +8,7 @@ using System.Text.Json;
 [ApiController]
 [Route("api/[controller]")]
 [EnableRateLimiting("fixed")]
+[RequestSizeLimit(32_768)]
 public class ContactController : ControllerBase
 {
     private readonly IHttpClientFactory _clientFactory;
@@ -20,7 +21,7 @@ public class ContactController : ControllerBase
     }
 
     [HttpPost("send")]
-    public async Task<IActionResult> SendTransmission([FromBody] ContactRequest request)
+    public async Task<IActionResult> SendTransmission([FromBody] ContactRequest request, CancellationToken cancellationToken)
     {
         // Honeypot anti-spam: silently pretend success for bots.
         if (!string.IsNullOrWhiteSpace(request.Honeypot))
@@ -33,12 +34,21 @@ public class ContactController : ControllerBase
         var subject = SanitizeSubject(request.Subject?.Trim() ?? string.Empty);
         var message = request.Message.Trim();
 
+        // Defense-in-depth: [Required] allows whitespace-only strings, so reject
+        // blanks after trimming even if model validation is bypassed/changed.
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(email) ||
+            string.IsNullOrWhiteSpace(subject) || string.IsNullOrWhiteSpace(message))
+        {
+            return BadRequest(new { status = "ERROR", message = "All fields are required." });
+        }
+
         var client = _clientFactory.CreateClient("ResendClient");
 
         var emailPayload = new
         {
             from = "onboarding@resend.dev",
             to = "halloultarek1@gmail.com",
+            reply_to = email,
             subject = $"[PORTFOLIO] {subject}",
             html = $@"
                 <h3>New Portfolio Message</h3>
@@ -51,16 +61,22 @@ public class ContactController : ControllerBase
 
         try
         {
-            var response = await client.PostAsync("emails", content);
+            var response = await client.PostAsync("emails", content, cancellationToken);
 
             if (response.IsSuccessStatusCode)
             {
                 return Ok(new { status = "SUCCESS" });
             }
 
-            var responseBody = await response.Content.ReadAsStringAsync();
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
             _logger.LogError("Resend rejected email (status {StatusCode}): {Body}", response.StatusCode, responseBody);
-            return StatusCode((int)response.StatusCode, new { status = "ERROR", message = "Uplink failed." });
+            // Do not forward the upstream status code: it leaks provider state
+            // (e.g. 401 = bad key, 429 = quota). Return a generic gateway error.
+            return StatusCode(StatusCodes.Status502BadGateway, new { status = "ERROR", message = "Uplink failed." });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return StatusCode(499, new { status = "ERROR", message = "Request cancelled." });
         }
         catch (Exception ex)
         {
