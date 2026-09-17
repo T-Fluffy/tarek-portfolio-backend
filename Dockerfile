@@ -1,10 +1,12 @@
 # 1. Build Stage
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-COPY *.csproj ./
-RUN dotnet restore
+COPY Portfolio.Backend.csproj ./
+RUN dotnet restore Portfolio.Backend.csproj
 COPY . .
-RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
+# Publish only the API project: the v3 test project is an Exe and must not
+# be published into the runtime image (also silences Trivy's multi-root warning).
+RUN dotnet publish Portfolio.Backend.csproj -c Release -o /app/publish /p:UseAppHost=false
 
 # 2. Runtime Stage
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
